@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskFlow - 업무 관리</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="max-w-2xl mx-auto py-10 px-4">
+
+        <!-- 헤더 -->
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">TaskFlow</h1>
+            <p class="text-gray-500 mt-1">업무를 추가하고 진행 상태를 관리하세요</p>
+        </div>
+
+        <!-- 업무 추가 폼 -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+            <div class="flex gap-2 mb-3">
+                <input id="taskInput" type="text" placeholder="새 업무를 입력하세요..."
+                    class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+                <button onclick="addTask()"
+                    class="bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors">
+                    추가
+                </button>
+            </div>
+            <div class="flex gap-4 text-sm text-gray-500">
+                <label class="flex items-center gap-2">
+                    <span class="whitespace-nowrap">시작일</span>
+                    <input id="newStartDate" type="date"
+                        class="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300">
+                </label>
+                <label class="flex items-center gap-2">
+                    <span class="whitespace-nowrap">종료일</span>
+                    <input id="newEndDate" type="date"
+                        class="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300">
+                </label>
+            </div>
+        </div>
+
+        <!-- 통계 -->
+        <div id="stats" class="grid grid-cols-3 gap-3 mb-6"></div>
+
+        <!-- 업무 목록 -->
+        <div id="taskList" class="space-y-3"></div>
+    </div>
+
+    <script>
+        const API = 'http://localhost:8000/api/tasks';
+
+        const STATUS_BADGE = {
+            'todo': 'bg-gray-100 text-gray-600',
+            'in_progress': 'bg-blue-100 text-blue-700',
+            'done': 'bg-green-100 text-green-700'
+        };
+
+        // 업무 목록 불러오기
+        async function loadTasks() {
+            try {
+                const res = await fetch(API);
+                const tasks = await res.json();
+                renderStats(tasks);
+                renderTasks(tasks);
+            } catch {
+                document.getElementById('taskList').innerHTML =
+                    '<p class="text-center text-red-400 py-10">서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인하세요.</p>';
+            }
+        }
+
+        // 통계 렌더링
+        function renderStats(tasks) {
+            const counts = { todo: 0, in_progress: 0, done: 0 };
+            tasks.forEach(t => counts[t.status]++);
+            document.getElementById('stats').innerHTML = [
+                { key: 'todo', label: '할 일', color: 'text-gray-700' },
+                { key: 'in_progress', label: '진행 중', color: 'text-blue-600' },
+                { key: 'done', label: '완료', color: 'text-green-600' }
+            ].map(s => `
+                <div class="bg-white rounded-xl border border-gray-200 p-4 text-center shadow-sm">
+                    <div class="text-2xl font-bold ${s.color}">${counts[s.key]}</div>
+                    <div class="text-xs text-gray-500 mt-1">${s.label}</div>
+                </div>
+            `).join('');
+        }
+
+        // 기한 초과 여부 판단
+        function isOverdue(task) {
+            if (!task.end_date || task.status === 'done') return false;
+            const today = new Date().toISOString().split('T')[0];
+            return task.end_date < today;
+        }
+
+        // 업무 목록 렌더링
+        function renderTasks(tasks) {
+            const list = document.getElementById('taskList');
+            if (tasks.length === 0) {
+                list.innerHTML = '<p class="text-center text-gray-400 py-10">등록된 업무가 없습니다.</p>';
+                return;
+            }
+            list.innerHTML = tasks.map(task => {
+                const overdue = isOverdue(task);
+                const cardClass = overdue
+                    ? 'bg-red-50 rounded-xl shadow-sm border border-red-300 p-4'
+                    : 'bg-white rounded-xl shadow-sm border border-gray-200 p-4';
+                const endDateClass = overdue
+                    ? 'border border-red-300 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-red-300 text-red-500'
+                    : 'border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300';
+                return `
+                <div class="${cardClass}">
+                    <!-- 제목 + 상태 + 삭제 -->
+                    <div class="flex items-center gap-2 mb-3">
+                        <div class="flex-1">
+                            <span id="title-display-${task.id}"
+                                class="block text-gray-800 font-medium text-sm cursor-pointer hover:text-blue-500 transition-colors"
+                                title="클릭하여 편집"
+                                onclick="startEdit(${task.id}, '${escapeAttr(task.title)}')">
+                                ${escapeHtml(task.title)}
+                            </span>
+                            <div id="title-edit-${task.id}" class="hidden flex gap-1">
+                                <input type="text" id="title-input-${task.id}"
+                                    class="flex-1 border border-blue-400 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                    onkeydown="handleEditKey(event, ${task.id})"
+                                    onblur="saveTitle(${task.id})">
+                                <button onmousedown="event.preventDefault(); saveTitle(${task.id})"
+                                    class="text-blue-500 hover:text-blue-700 text-xs px-2 font-medium">저장</button>
+                                <button onmousedown="event.preventDefault(); cancelEdit(${task.id})"
+                                    class="text-gray-400 hover:text-gray-600 text-xs px-1">취소</button>
+                            </div>
+                        </div>
+                        ${overdue ? '<span class="text-xs font-semibold text-red-500 bg-red-100 px-2 py-0.5 rounded-full whitespace-nowrap">기한 초과</span>' : ''}
+                        <select onchange="updateField(${task.id}, 'status', this.value)"
+                            class="text-xs px-2 py-1.5 rounded-lg border border-gray-200 focus:outline-none cursor-pointer ${STATUS_BADGE[task.status]}">
+                            <option value="todo" ${task.status === 'todo' ? 'selected' : ''}>할 일</option>
+                            <option value="in_progress" ${task.status === 'in_progress' ? 'selected' : ''}>진행 중</option>
+                            <option value="done" ${task.status === 'done' ? 'selected' : ''}>완료</option>
+                        </select>
+                        <button onclick="deleteTask(${task.id})"
+                            class="text-gray-300 hover:text-red-500 transition-colors text-xl leading-none font-bold" title="삭제">
+                            ×
+                        </button>
+                    </div>
+                    <!-- 날짜 -->
+                    <div class="flex gap-4 text-xs text-gray-500">
+                        <label class="flex items-center gap-1.5">
+                            <span class="text-gray-400">시작일</span>
+                            <input type="date" value="${task.start_date || ''}"
+                                onchange="updateField(${task.id}, 'start_date', this.value || null)"
+                                class="border border-gray-200 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300">
+                        </label>
+                        <label class="flex items-center gap-1.5">
+                            <span class="${overdue ? 'text-red-400 font-medium' : 'text-gray-400'}">종료일</span>
+                            <input type="date" value="${task.end_date || ''}"
+                                onchange="updateField(${task.id}, 'end_date', this.value || null)"
+                                class="${endDateClass}">
+                        </label>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // 제목 편집 시작
+        function startEdit(id, currentTitle) {
+            document.getElementById(`title-display-${id}`).classList.add('hidden');
+            const editDiv = document.getElementById(`title-edit-${id}`);
+            editDiv.classList.remove('hidden');
+            const input = document.getElementById(`title-input-${id}`);
+            input.value = currentTitle;
+            input.focus();
+            input.select();
+        }
+
+        // 편집 취소
+        function cancelEdit(id) {
+            document.getElementById(`title-display-${id}`).classList.remove('hidden');
+            document.getElementById(`title-edit-${id}`).classList.add('hidden');
+        }
+
+        // Enter / Escape 처리
+        function handleEditKey(e, id) {
+            if (e.key === 'Enter') saveTitle(id);
+            if (e.key === 'Escape') cancelEdit(id);
+        }
+
+        // 제목 저장
+        async function saveTitle(id) {
+            const input = document.getElementById(`title-input-${id}`);
+            if (!input) return;
+            const newTitle = input.value.trim();
+            if (!newTitle) { cancelEdit(id); return; }
+            await patch(id, { title: newTitle });
+            loadTasks();
+        }
+
+        // 특정 필드 업데이트 (status, start_date, end_date)
+        async function updateField(id, field, value) {
+            await patch(id, { [field]: value });
+            loadTasks();
+        }
+
+        // PATCH 공통 함수
+        async function patch(id, data) {
+            await fetch(`${API}/${id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+        }
+
+        // 업무 추가
+        async function addTask() {
+            const titleEl = document.getElementById('taskInput');
+            const startEl = document.getElementById('newStartDate');
+            const endEl = document.getElementById('newEndDate');
+            const title = titleEl.value.trim();
+            const startDate = startEl.value;
+            const endDate = endEl.value;
+
+            // 필수값 검증 — 빈 필드 테두리 빨간색으로 표시
+            let valid = true;
+            [titleEl, startEl, endEl].forEach(el => el.classList.remove('border-red-400', 'ring-1', 'ring-red-400'));
+            if (!title) { titleEl.classList.add('border-red-400', 'ring-1', 'ring-red-400'); valid = false; }
+            if (!startDate) { startEl.classList.add('border-red-400', 'ring-1', 'ring-red-400'); valid = false; }
+            if (!endDate) { endEl.classList.add('border-red-400', 'ring-1', 'ring-red-400'); valid = false; }
+            if (!valid) return;
+
+            await fetch(API, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title, start_date: startDate, end_date: endDate })
+            });
+            titleEl.value = '';
+            startEl.value = '';
+            endEl.value = '';
+            [titleEl, startEl, endEl].forEach(el => el.classList.remove('border-red-400', 'ring-1', 'ring-red-400'));
+            loadTasks();
+        }
+
+        // 업무 삭제
+        async function deleteTask(id) {
+            await fetch(`${API}/${id}`, { method: 'DELETE' });
+            loadTasks();
+        }
+
+        // XSS 방지
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.appendChild(document.createTextNode(text));
+            return div.innerHTML;
+        }
+
+        // 속성값 이스케이프
+        function escapeAttr(text) {
+            return text.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        }
+
+        // Enter 키로 업무 추가
+        document.getElementById('taskInput').addEventListener('keypress', e => {
+            if (e.key === 'Enter') addTask();
+        });
+
+        loadTasks();
+    </script>
+</body>
+</html>
