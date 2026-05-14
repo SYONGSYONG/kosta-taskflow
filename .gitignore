@@ -1,4 +1,5 @@
 .claude/
+.playwright-mcp/
 *.db
 __pycache__/
 *.pyc
